@@ -1,0 +1,25 @@
+version: '3.1'
+services:
+  contacts:
+    build: '.'
+    restart: unless-stopped
+    container_name: contacts-bot
+    env_file:
+      .env
+    volumes:
+      - data:/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.contacts-secure.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.contacts-secure.entrypoints=websecure"
+      - "traefik.http.routers.contacts-secure.tls=true"
+      - "traefik.http.routers.contacts-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.services.contacts-secure.loadbalancer.server.port=80"
+    networks:
+      - web
+volumes:
+  data:
+networks:
+  web:
+    external: true

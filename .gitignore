@@ -1,0 +1,8 @@
+.idea/
+__pychache__/
+data/tokens
+data/challenges
+data/states/*
+data/reqs/*
+secrets.json
+.env
