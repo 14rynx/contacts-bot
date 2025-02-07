@@ -228,6 +228,8 @@ async def invite(ctx, member: discord.Member):
 @command_error_handler
 async def kick(ctx, member: discord.Member):
     """Removes a user and their characters from contacts."""
+    await ctx.send(f"Kicking {member} ...")
+
     user = User.get_or_none(User.user_id == str(member.id))
 
     if user is None:
@@ -288,6 +290,8 @@ async def revoke(ctx, *args):
         return
 
     if len(args) == 0:
+        await ctx.send(f"Revoking all your characters ...")
+
         user_characters = Character.select().where(Character.user == user)
         if user_characters:
             for character in user_characters:
