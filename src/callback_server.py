@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from aiohttp import web
@@ -14,6 +15,9 @@ logger.setLevel(logging.INFO)
 @tasks.loop()
 async def callback_server(preston: Preston, add_contacts):
     routes = web.RouteTableDef()
+
+    async def async_add_contacts(character):
+        add_contacts(character)
 
     @routes.get('/')
     async def hello(request):
@@ -45,7 +49,10 @@ async def callback_server(preston: Preston, add_contacts):
         character_name = character_data["CharacterName"]
 
         # Create / Update user and store refresh_token
-        user, user_created = User.get_or_create(user_id=challenge.user.user_id)
+        user = User.get_or_none(user_id=challenge.user.user_id)
+
+        if user is None:
+            return web.Response(text="You are not allowed to link characters!", status=403)
 
         character, created = Character.get_or_create(
             character_id=character_id, user=user,
@@ -53,7 +60,8 @@ async def callback_server(preston: Preston, add_contacts):
         )
         character.token = auth.refresh_token
         character.save()
-        add_contacts(character)
+
+        asyncio.create_task(async_add_contacts(character))
 
         logger.info(f"Added character {character_id}")
         if created:
