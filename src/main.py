@@ -104,10 +104,13 @@ def delete_character_contacts(preston: Preston, character_id: int, contacts_to_d
     contacts_to_delete = contacts_to_delete.intersection(contacts_with_correct_standing)
 
     if len(contacts_to_delete) > 0:
-        preston.get_op(
+        logger.info("deleting contacts")
+        preston.delete_op(
             "delete_characters_character_id_contacts",
-            character_id=str(character_id),
-            contact_ids=" ".join(list(contacts_to_delete))
+            path_data={
+                "character_id": str(character_id),
+                "contact_ids": list(contacts_to_delete),
+            },
         )
 
 

@@ -1,5 +1,5 @@
 requests
 Pyyaml
-preston==4.6.0
+preston @ git+https://github.com/14rynx/Preston@delete_op
 discord
 peewee
