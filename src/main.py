@@ -108,10 +108,10 @@ def delete_character_contacts(preston: Preston, character_id: str, contacts_to_d
         character_id=str(character_id)
     )
 
-    contacts_with_correct_standing = set(
-        str(c['contact_id']) for c in contacts if BOT_STANDING - 1e-3 < c.get('standing') < BOT_STANDING + 1e-3
+    contacts_with_wrong_standing = set(
+        str(c['contact_id']) for c in contacts if c.get('standing') < BOT_STANDING - 1e-3 or c.get('standing') > BOT_STANDING + 1e-3
     )
-    contacts_to_delete &= contacts_with_correct_standing
+    contacts_to_delete -= contacts_with_wrong_standing
 
     if len(contacts_to_delete) == 0:
         return
