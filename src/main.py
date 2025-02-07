@@ -203,7 +203,7 @@ async def characters(ctx):
         character_names_body = "\n".join(character_names)
     else:
         character_names_body = "<no authorized characters>"
-    response = f"You have the following character(s) authenticated:\n{character_names_body}"
+    response = f"## Characters\n{character_names_body}"
 
     await send_large_message(ctx, response)
 
@@ -240,16 +240,16 @@ async def kick(ctx, member: discord.Member):
         remove_contacts(character)
         char_auth = with_refresh(base_preston, character.token)
         character_name = char_auth.whoami()['CharacterName']
-        character.delete()
+        character.delete_instance()
         removed_character_names.append(character_name)
 
     # Delete User
     user.delete_instance()
 
     # Send output of what was removes
-    response = f"Removed the User {user} and his characters:\n"
+    response = f"Removed the user <@{user.user_id}> and his characters:\n"
     for character_name in removed_character_names:
-        response += f"  - {character_name}\n"
+        response += f" - {character_name}\n"
     await send_large_message(ctx, response)
 
 
