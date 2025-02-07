@@ -151,7 +151,7 @@ async def on_ready():
 async def info(ctx):
     """Returns a list of currently registered users and characters."""
     if not ctx.author.id == int(os.getenv("ADMIN")):
-        await ctx.send(f"You do not have rights to invite users.")
+        await ctx.send(f"You do not have rights to display all info.")
         return
 
     users = User.select()
@@ -171,16 +171,16 @@ async def info(ctx):
         if character_names:
             character_names_body = "\n".join(character_names)
         else:
-            character_names_body = "<no authorized characters>"
-        user_responses = f"Registered Characters:\n{character_names_body}"
+            character_names_body = "\n<no authorized characters>"
+        user_responses.append(f"### User <@{user.user_id}>\n{character_names_body}")
 
     if user_responses:
         user_responses_body = "\n".join(user_responses)
     else:
         user_responses_body = "<no authorized users>"
-    response = f"Registered Users and Characters:\n{user_responses_body}"
+    response = f"## Users\n{user_responses_body}"
 
-    await send_large_message(ctx, response)
+    await send_large_message(ctx, response, allowed_mentions=discord.AllowedMentions(users=False))
 
 
 @bot.command()

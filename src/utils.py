@@ -27,7 +27,7 @@ async def lookup(preston, string, return_type):
             raise ValueError("Could not parse that character!")
 
 
-async def send_large_message(ctx, message, max_chars=1994):
+async def send_large_message(ctx, message, max_chars=1994, **kwargs):
     open_code_block = False
 
     while len(message) > 0:
@@ -37,7 +37,7 @@ async def send_large_message(ctx, message, max_chars=1994):
             if open_code_block:
                 message = f"```{message}"
 
-            await ctx.send(message)
+            await ctx.send(message, **kwargs)
             break
 
         # Find the last newline within the max_chars limit
@@ -67,5 +67,5 @@ async def send_large_message(ctx, message, max_chars=1994):
             part = f"{part}```"
 
         # Send the current part
-        await ctx.send(part)
+        await ctx.send(part, **kwargs)
 
