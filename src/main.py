@@ -11,6 +11,8 @@ from callback_server import callback_server
 from models import initialize_database, User, Challenge, Character
 from utils import lookup, send_large_message
 
+BOT_STANDING = 5.5
+
 # Configure the logger
 logger = logging.getLogger('discord.main')
 logger.setLevel(logging.INFO)
@@ -69,7 +71,7 @@ def add_contacts(this_character):
             'post_characters_character_id_contacts',
             path_data={
                 "character_id": character.character_id,
-                "standing": 10.0,
+                "standing": BOT_STANDING,
                 "watched": False,
             },
             post_data=[this_character.character_id],
@@ -82,36 +84,47 @@ def add_contacts(this_character):
         'post_characters_character_id_contacts',
         path_data={
             "character_id": this_character.character_id,
-            "standing": 10.0,
+            "standing": BOT_STANDING,
             "watched": False,
         },
         post_data=character_ids,
     )
 
 
+def delete_character_contacts(preston, character_id, contacts_to_delete):
+    # Get the list of contacts for the character
+    contacts = preston.get_op(
+        "get_characters_character_id_contacts",
+        character_id=character_id
+    )
+
+    contacts_with_correct_standing = set(
+        str(c['contact_id']) for c in contacts if BOT_STANDING - 1e-3 < c.get('standing') < BOT_STANDING + 1e-3
+    )
+    contacts_to_delete = contacts_to_delete.intersection(contacts_with_correct_standing)
+
+    if len(contacts_to_delete) > 0:
+        preston.get_op(
+            "delete_characters_character_id_contacts",
+            character_id=character_id,
+            contact_ids=list(contacts_to_delete)
+        )
+
+
 def remove_contacts(this_character: Character):
     """Remove all contacts related with this_character"""
     this_char_authed_preston = with_refresh(base_preston, this_character.token)
 
-    # Delete related contacts of this character
     contract_ids = []
-    for character in Character.select().where(Character.character_id != this_character.character_id):
-        contract_ids.append(character.character_id)
-
-    this_char_authed_preston.get_op(
-        "delete_characters_character_id_contacts",
-        character_id=this_character.character_id,
-        contact_ids=" ".join(contract_ids)
-    )
 
     # Delete this contact for other characters
     for character in Character.select().where(Character.character_id != this_character.character_id):
         authed_preston = with_refresh(base_preston, character.token)
-        authed_preston.get_op(
-            "delete_characters_character_id_contacts",
-            character_id=character.character_id,
-            contact_ids=this_character.character_id
-        )
+        delete_character_contacts(authed_preston, character.character_id, this_character.character_id)
+        contract_ids.append(character.character_id)
+
+    # Delete related contacts of this character
+    delete_character_contacts(this_char_authed_preston, this_character.character_id, contract_ids)
 
 
 @bot.event
