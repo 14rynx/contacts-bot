@@ -5,7 +5,6 @@ from discord.ext import tasks
 from preston import Preston
 
 from models import User, Character, Challenge
-from main import add_contacts
 
 # Configure the logger
 logger = logging.getLogger('callback')
@@ -13,7 +12,7 @@ logger.setLevel(logging.INFO)
 
 
 @tasks.loop()
-async def callback_server(preston: Preston):
+async def callback_server(preston: Preston, add_contacts):
     routes = web.RouteTableDef()
 
     @routes.get('/')

@@ -58,9 +58,65 @@ def command_error_handler(func):
     return wrapper
 
 
+def add_contacts(this_character):
+    """Add all contacts related with this_character"""
+
+    # Got through registered characters and add this contact
+    character_ids = []
+    for character in Character.select().where(Character.character_id != this_character.character_id):
+        authed_preston = with_refresh(base_preston, character.token)
+        authed_preston.post_op(
+            'post_characters_character_id_contacts',
+            path_data={
+                "character_id": character.character_id,
+                "standing": 10.0,
+                "watched": False,
+            },
+            post_data=[this_character.character_id],
+        )
+        character_ids.append(character.character_id)
+
+    # Add contacts to this character
+    this_char_authed_preston = with_refresh(base_preston, this_character.token)
+    this_char_authed_preston.post_op(
+        'post_characters_character_id_contacts',
+        path_data={
+            "character_id": this_character.character_id,
+            "standing": 10.0,
+            "watched": False,
+        },
+        post_data=character_ids,
+    )
+
+
+def remove_contacts(this_character: Character):
+    """Remove all contacts related with this_character"""
+    this_char_authed_preston = with_refresh(base_preston, this_character.token)
+
+    # Delete related contacts of this character
+    contract_ids = []
+    for character in Character.select().where(Character.character_id != this_character.character_id):
+        contract_ids.append(character.character_id)
+
+    this_char_authed_preston.get_op(
+        "delete_characters_character_id_contacts",
+        character_id=this_character.character_id,
+        contact_ids=" ".join(contract_ids)
+    )
+
+    # Delete this contact for other characters
+    for character in Character.select().where(Character.character_id != this_character.character_id):
+        authed_preston = with_refresh(base_preston, character.token)
+        authed_preston.get_op(
+            "delete_characters_character_id_contacts",
+            character_id=character.character_id,
+            contact_ids=this_character.character_id
+        )
+
+
 @bot.event
 async def on_ready():
-    callback_server.start(base_preston)
+    callback_server.start(base_preston, add_contacts)
 
 
 @bot.command()
@@ -121,72 +177,16 @@ async def characters(ctx):
     await send_large_message(ctx, response)
 
 
-def remove_contacts(this_character: Character):
-    """Remove all contacts related with this_character"""
-    this_char_authed_preston = with_refresh(base_preston, this_character.token)
-
-    # Delete related contacts of this character
-    contract_ids = []
-    for character in Character.select().where(Character.character_id != this_character.character_id):
-        contract_ids.append(character.character_id)
-
-    this_char_authed_preston.get_op(
-        "delete_characters_character_id_contacts",
-        character_id=this_character.character_id,
-        contact_ids=" ".join(contract_ids)
-    )
-
-    # Delete this contact for other characters
-    for character in Character.select().where(Character.character_id != this_character.character_id):
-        authed_preston = with_refresh(base_preston, character.token)
-        authed_preston.get_op(
-            "delete_characters_character_id_contacts",
-            character_id=character.character_id,
-            contact_ids=this_character.character_id
-        )
-
-
-def add_contacts(this_character):
-    """Add all contacts related with this_character"""
-
-    # Got through registered characters and add this contact
-    character_ids = []
-    for character in Character.select().where(Character.character_id != this_character.character_id):
-        authed_preston = with_refresh(base_preston, character.token)
-        authed_preston.post_op(
-            'post_characters_character_id_contacts',
-            path_data={
-                "character_id": character.character_id,
-                "standing": 10.0,
-                "watched": False,
-                },
-            post_data=[this_character.character_id],
-        )
-        character_ids.append(character.character_id)
-
-    # Add contacts to this character
-    this_char_authed_preston = with_refresh(base_preston, this_character.token)
-    this_char_authed_preston.post_op(
-        'post_characters_character_id_contacts',
-        path_data={
-            "character_id": this_character.character_id,
-            "standing": 10.0,
-            "watched": False,
-        },
-        post_data=character_ids,
-    )
-
-
 @bot.command()
 @command_error_handler
 async def invite(ctx, member: discord.Member):
     """Adds a user to be able to register characters"""
-    if not ctx.author.id == os.getenv("ADMIN"):
+    if not ctx.author.id == int(os.getenv("ADMIN")):
         await ctx.send(f"You do not have rights to invite users.")
         return
 
     user, created = User.get_or_create(user_id=str(member.id))
-    user.save()
+
     if created:
         await ctx.send(f"Invited {member}.")
     else:
@@ -282,8 +282,6 @@ async def revoke(ctx, *args):
         remove_contacts(character)
         character.delete_instance()
         await ctx.send(f"Successfully removed " + " ".join(args) + ".")
-
-
 
 
 if __name__ == "__main__":
