@@ -11,6 +11,7 @@ from callback_server import callback_server
 from models import initialize_database, User, Challenge, Character
 from utils import lookup, send_large_message
 
+# Standing to set for Contacts created by this bot
 BOT_STANDING = 5.5
 
 # Configure the logger
@@ -60,39 +61,48 @@ def command_error_handler(func):
     return wrapper
 
 
+def add_character_contacts(preston: Preston, character_id: str, contacts_to_add: set[str]):
+    """Add contracts for a character while not overwriting existing contracts"""
+
+    contacts = preston.get_op(
+        "get_characters_character_id_contacts",
+        character_id=str(character_id)
+    )
+
+    existing_contracts = {str(c['contact_id']) for c in contacts}
+    contacts_to_add -= existing_contracts
+
+    if len(contacts_to_add) == 0:
+        return
+
+    preston.post_op(
+        'post_characters_character_id_contacts',
+        path_data={
+            "character_id": character_id,
+            "standing": BOT_STANDING,
+            "watched": False,
+        },
+        post_data=list(contacts_to_add),
+    )
+
+
 def add_contacts(this_character: Character):
     """Add all contacts related with this_character"""
 
     # Got through registered characters and add this contact
-    character_ids = []
+    character_ids = set()
     for character in Character.select().where(Character.character_id != this_character.character_id):
         authed_preston = with_refresh(base_preston, character.token)
-        authed_preston.post_op(
-            'post_characters_character_id_contacts',
-            path_data={
-                "character_id": character.character_id,
-                "standing": BOT_STANDING,
-                "watched": False,
-            },
-            post_data=[this_character.character_id],
-        )
-        character_ids.append(character.character_id)
+        add_character_contacts(authed_preston, character.character_id, {this_character.character_id})
+        character_ids.add(character.character_id)
 
     # Add contacts to this character
     this_char_authed_preston = with_refresh(base_preston, this_character.token)
-    this_char_authed_preston.post_op(
-        'post_characters_character_id_contacts',
-        path_data={
-            "character_id": this_character.character_id,
-            "standing": BOT_STANDING,
-            "watched": False,
-        },
-        post_data=character_ids,
-    )
+    add_character_contacts(this_char_authed_preston, this_character.character_id, character_ids)
 
 
-def delete_character_contacts(preston: Preston, character_id: int, contacts_to_delete: set):
-    # Get the list of contacts for the character
+def delete_character_contacts(preston: Preston, character_id: str, contacts_to_delete: set[str]):
+    """Delete contracts for a character while keeping contracts not by the bot"""
     contacts = preston.get_op(
         "get_characters_character_id_contacts",
         character_id=str(character_id)
@@ -101,17 +111,18 @@ def delete_character_contacts(preston: Preston, character_id: int, contacts_to_d
     contacts_with_correct_standing = set(
         str(c['contact_id']) for c in contacts if BOT_STANDING - 1e-3 < c.get('standing') < BOT_STANDING + 1e-3
     )
-    contacts_to_delete = contacts_to_delete.intersection(contacts_with_correct_standing)
+    contacts_to_delete &= contacts_with_correct_standing
 
-    if len(contacts_to_delete) > 0:
-        logger.info("deleting contacts")
-        preston.delete_op(
-            "delete_characters_character_id_contacts",
-            path_data={
-                "character_id": str(character_id),
-                "contact_ids": list(contacts_to_delete),
-            },
-        )
+    if len(contacts_to_delete) == 0:
+        return
+
+    preston.delete_op(
+        "delete_characters_character_id_contacts",
+        path_data={
+            "character_id": str(character_id),
+            "contact_ids": list(contacts_to_delete),
+        },
+    )
 
 
 def remove_contacts(this_character: Character):
@@ -138,7 +149,11 @@ async def on_ready():
 @bot.command()
 @command_error_handler
 async def info(ctx):
-    """Returns a list of currently registered Users and Characters"""
+    """Returns a list of currently registered users and characters."""
+    if not ctx.author.id == int(os.getenv("ADMIN")):
+        await ctx.send(f"You do not have rights to invite users.")
+        return
+
     users = User.select()
     if not users.exists():
         await ctx.send("No users registered.")
@@ -196,7 +211,7 @@ async def characters(ctx):
 @bot.command()
 @command_error_handler
 async def invite(ctx, member: discord.Member):
-    """Adds a user to be able to register characters"""
+    """Adds a user to be able to register characters."""
     if not ctx.author.id == int(os.getenv("ADMIN")):
         await ctx.send(f"You do not have rights to invite users.")
         return
@@ -241,8 +256,7 @@ async def kick(ctx, member: discord.Member):
 @bot.command()
 @command_error_handler
 async def auth(ctx):
-    """Sends you an authorization link for a character.
-    :args: -c: authorize for your corporation"""
+    """Sends you an authorization link for characters."""
 
     secret_state = secrets.token_urlsafe(60)
 
@@ -263,8 +277,9 @@ async def auth(ctx):
 @bot.command()
 @command_error_handler
 async def revoke(ctx, *args):
-    """Revokes ESI access from all your characters.
-    :args: Character that you want to revoke access to."""
+    """Revokes ESI access for your characters.
+    :args: Character that you want to revoke access to.
+    If no arguments are provided, revokes all characters."""
 
     user = User.get_or_none(User.user_id == str(ctx.author.id))
 
