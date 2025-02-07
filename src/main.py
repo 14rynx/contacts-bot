@@ -36,7 +36,7 @@ intent.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intent)
 
 
-def with_refresh(preston_instance, refresh_token: str):
+def with_refresh(preston_instance: Preston, refresh_token: str):
     new_kwargs = dict(preston_instance._kwargs)
     new_kwargs["refresh_token"] = refresh_token
     new_kwargs["access_token"] = None
@@ -60,7 +60,7 @@ def command_error_handler(func):
     return wrapper
 
 
-def add_contacts(this_character):
+def add_contacts(this_character: Character):
     """Add all contacts related with this_character"""
 
     # Got through registered characters and add this contact
@@ -91,11 +91,11 @@ def add_contacts(this_character):
     )
 
 
-def delete_character_contacts(preston, character_id, contacts_to_delete):
+def delete_character_contacts(preston: Preston, character_id: int, contacts_to_delete: set):
     # Get the list of contacts for the character
     contacts = preston.get_op(
         "get_characters_character_id_contacts",
-        character_id=character_id
+        character_id=str(character_id)
     )
 
     contacts_with_correct_standing = set(
@@ -106,8 +106,8 @@ def delete_character_contacts(preston, character_id, contacts_to_delete):
     if len(contacts_to_delete) > 0:
         preston.get_op(
             "delete_characters_character_id_contacts",
-            character_id=character_id,
-            contact_ids=list(contacts_to_delete)
+            character_id=str(character_id),
+            contact_ids=" ".join(list(contacts_to_delete))
         )
 
 
@@ -115,13 +115,13 @@ def remove_contacts(this_character: Character):
     """Remove all contacts related with this_character"""
     this_char_authed_preston = with_refresh(base_preston, this_character.token)
 
-    contract_ids = []
+    contract_ids = set()
 
     # Delete this contact for other characters
     for character in Character.select().where(Character.character_id != this_character.character_id):
         authed_preston = with_refresh(base_preston, character.token)
-        delete_character_contacts(authed_preston, character.character_id, this_character.character_id)
-        contract_ids.append(character.character_id)
+        delete_character_contacts(authed_preston, character.character_id, {this_character.character_id})
+        contract_ids.add(character.character_id)
 
     # Delete related contacts of this character
     delete_character_contacts(this_char_authed_preston, this_character.character_id, contract_ids)
