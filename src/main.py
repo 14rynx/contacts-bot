@@ -72,7 +72,7 @@ def add_character_contacts(preston: Preston, character_id: str, contacts_to_add:
         character_id=str(character_id)
     )
 
-    existing_contracts = {str(c['contact_id']) for c in contacts}
+    existing_contracts = {str(c['contact_id']) for c in contacts if c.get('standing') > BOT_STANDING}
     contacts_to_add -= existing_contracts
 
     if len(contacts_to_add) == 0:
