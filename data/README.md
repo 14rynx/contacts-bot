@@ -1,0 +1,1 @@
+This file is here so that the /data directory can be commited empty.
