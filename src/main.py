@@ -268,7 +268,7 @@ async def auth(ctx):
     user = User.get_or_none(user_id=str(ctx.author.id))
     if user is None:
         await ctx.send(
-            f"You do not have access to this bot, contact @<{os.getenv('ADMIN')}> so he allows you to register characters."
+            f"You do not have access to this bot, contact <@{os.getenv('ADMIN')}> so he allows you to register characters."
         )
         return
 
