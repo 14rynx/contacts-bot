@@ -11,12 +11,15 @@ from callback_server import callback_server
 from models import initialize_database, User, Challenge, Character
 from utils import lookup, send_large_message
 
-# Standing to set for Contacts created by this bot
-BOT_STANDING = 5.5
-
 # Configure the logger
 logger = logging.getLogger('discord.main')
 logger.setLevel(logging.INFO)
+
+# Standing to set for Contacts created by this bot
+BOT_STANDING = float(os.getenv("STANDING", 5.5))
+if BOT_STANDING in [-10, -5, 0, 5, 10]:
+    logger.error("The standing value must not be a value able to set by players.")
+    exit(1)
 
 # Initialize the database
 initialize_database()
