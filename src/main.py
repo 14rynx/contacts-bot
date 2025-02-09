@@ -8,7 +8,7 @@ from discord.ext import commands
 from preston import Preston
 
 from callback_server import callback_server
-from models import initialize_database, User, Challenge, Character
+from models import initialize_database, User, Challenge, Character, ExternalContact
 from utils import lookup, send_large_message
 
 # Configure the logger
@@ -89,30 +89,16 @@ def add_character_contacts(preston: Preston, character_id: str, contacts_to_add:
     )
 
 
-def add_contacts(this_character: Character):
-    """Add all contacts related with this_character"""
-
-    # Got through registered characters and add this contact
-    character_ids = set()
-    for character in Character.select().where(Character.character_id != this_character.character_id):
-        authed_preston = with_refresh(base_preston, character.token)
-        add_character_contacts(authed_preston, character.character_id, {this_character.character_id})
-        character_ids.add(character.character_id)
-
-    # Add contacts to this character
-    this_char_authed_preston = with_refresh(base_preston, this_character.token)
-    add_character_contacts(this_char_authed_preston, this_character.character_id, character_ids)
-
-
 def delete_character_contacts(preston: Preston, character_id: str, contacts_to_delete: set[str]):
-    """Delete contracts for a character while keeping contracts not by the bot"""
+    """Delete contacts for a character while keeping contracts not by the bot"""
     contacts = preston.get_op(
         "get_characters_character_id_contacts",
         character_id=str(character_id)
     )
 
     contacts_with_wrong_standing = set(
-        str(c['contact_id']) for c in contacts if c.get('standing') < BOT_STANDING - 1e-3 or c.get('standing') > BOT_STANDING + 1e-3
+        str(c['contact_id']) for c in contacts if
+        c.get('standing') < BOT_STANDING - 1e-3 or c.get('standing') > BOT_STANDING + 1e-3
     )
     contacts_to_delete -= contacts_with_wrong_standing
 
@@ -128,8 +114,8 @@ def delete_character_contacts(preston: Preston, character_id: str, contacts_to_d
     )
 
 
-def remove_contacts(this_character: Character):
-    """Remove all contacts related with this_character"""
+def remove_contact(this_character: Character):
+    """Add all required contacts for a new linked character."""
     this_char_authed_preston = with_refresh(base_preston, this_character.token)
 
     contract_ids = set()
@@ -143,10 +129,51 @@ def remove_contacts(this_character: Character):
     # Delete related contacts of this character
     delete_character_contacts(this_char_authed_preston, this_character.character_id, contract_ids)
 
+    # Delete external contacts of this character
+    external_contract_ids = set()
+    for external_contact in ExternalContact.select():
+        external_contract_ids.add(external_contact.contact_id)
+    delete_character_contacts(this_char_authed_preston, this_character.character_id, external_contract_ids)
+
+
+def add_contact(this_character: Character):
+    """Remove all required contacts for a linked character"""
+
+    # Got through registered characters and add this contact
+    character_ids = set()
+    for character in Character.select().where(Character.character_id != this_character.character_id):
+        authed_preston = with_refresh(base_preston, character.token)
+        add_character_contacts(authed_preston, character.character_id, {this_character.character_id})
+        character_ids.add(character.character_id)
+
+    # Add contacts to this character
+    this_char_authed_preston = with_refresh(base_preston, this_character.token)
+    add_character_contacts(this_char_authed_preston, this_character.character_id, character_ids)
+
+    # Add external contacts to this
+    external_contract_ids = set()
+    for external_contact in ExternalContact.select():
+        external_contract_ids.add(external_contact.contact_id)
+    add_character_contacts(this_char_authed_preston, this_character.character_id, external_contract_ids)
+
+
+def add_external_contact(contact_id: str):
+    """Add external contact to all characters"""
+    for character in Character.select():
+        authed_preston = with_refresh(base_preston, character.token)
+        add_character_contacts(authed_preston, character.character_id, {contact_id})
+
+
+def delete_external_contact(contact_id: str):
+    """Add external contact to all characters"""
+    for character in Character.select():
+        authed_preston = with_refresh(base_preston, character.token)
+        delete_character_contacts(authed_preston, character.character_id, {contact_id})
+
 
 @bot.event
 async def on_ready():
-    callback_server.start(base_preston, add_contacts)
+    callback_server.start(base_preston, add_contact)
 
 
 @bot.command()
@@ -231,6 +258,10 @@ async def invite(ctx, member: discord.Member):
 @command_error_handler
 async def kick(ctx, member: discord.Member):
     """Removes a user and their characters from contacts."""
+    if not ctx.author.id == int(os.getenv("ADMIN")):
+        await ctx.send(f"You do not have rights to kick users.")
+        return
+
     await ctx.send(f"Kicking {member} ...")
 
     user = User.get_or_none(User.user_id == str(member.id))
@@ -242,7 +273,7 @@ async def kick(ctx, member: discord.Member):
     # Remove contacts from all other characters
     removed_character_names = []
     for character in user.characters:
-        remove_contacts(character)
+        remove_contact(character)
         char_auth = with_refresh(base_preston, character.token)
         character_name = char_auth.whoami()['CharacterName']
         character.delete_instance()
@@ -298,7 +329,7 @@ async def revoke(ctx, *args):
         user_characters = Character.select().where(Character.user == user)
         if user_characters:
             for character in user_characters:
-                remove_contacts(character)
+                remove_contact(character)
                 character.delete_instance()
 
         user.delete_instance()
@@ -317,9 +348,96 @@ async def revoke(ctx, *args):
             await ctx.send("You have no character with that name linked.")
             return
 
-        remove_contacts(character)
+        remove_contact(character)
         character.delete_instance()
         await ctx.send(f"Successfully removed " + " ".join(args) + ".")
+
+
+@bot.command()
+@command_error_handler
+async def add_external(ctx, *args):
+    """Add an external (unauthenticated) character / corporation / alliance to all characters
+    Use -c or --corporation for corporations and -a or --alliance for alliances."""
+
+    if not ctx.author.id == int(os.getenv("ADMIN")):
+        await ctx.send(f"You do not have rights to add external contacts.")
+        return
+
+    if len(args) == 0:
+        await ctx.send("Please provide a character / corporation / alliance.")
+        return
+
+    if args[0] in ["-c", "--corporation"]:
+        return_type = "corporations"
+        data = " ".join(args[1:])
+    elif args[0] in ["-a", "--alliance"]:
+        return_type = "alliances"
+        data = " ".join(args[1:])
+    else:
+        return_type = "characters"
+        data = " ".join(args)
+
+    try:
+        contact_id = await lookup(base_preston, data, return_type=return_type)
+    except ValueError:
+        args_concatenated = " ".join(args)
+        await ctx.send(f"Args `{args_concatenated}` could not be parsed or looked up.")
+        return
+
+    contact, created = ExternalContact.get_or_create(
+        contact_id=contact_id,
+    )
+
+
+    add_external_contact(contact_id)
+
+    if created:
+        await ctx.send(f"Successfully added {data} as a contact." )
+    else:
+        await ctx.send(f"Successfully re-added {data} as a contact." )
+
+@bot.command()
+@command_error_handler
+async def remove_external(ctx, *args):
+    """Remove an external (unauthenticated) character / corporation / alliance to all characters
+    Use -c or --corporation for corporations and -a or --alliance for alliances."""
+    if not ctx.author.id == int(os.getenv("ADMIN")):
+        await ctx.send(f"You do not have rights to remove external contacts.")
+        return
+
+    if len(args) == 0:
+        await ctx.send("Please provide a character / corporation / alliance.")
+        return
+
+    if args[0] in ["-c", "--corporation"]:
+        return_type = "corporations"
+        data = " ".join(args[1:])
+    elif args[0] in ["-a", "--alliance"]:
+        return_type = "alliances"
+        data = " ".join(args[1:])
+    else:
+        return_type = "characters"
+        data = " ".join(args)
+
+    try:
+        contact_id = await lookup(base_preston, data, return_type=return_type)
+    except ValueError:
+        args_concatenated = " ".join(args)
+        await ctx.send(f"Args `{args_concatenated}` could not be parsed or looked up.")
+        return
+
+    contact = ExternalContact.get_or_none(
+        contact_id=contact_id,
+    )
+
+    if contact is None:
+        await ctx.send(f"{data} was not added and thus can not be removed.")
+        return
+
+    delete_external_contact(contact_id)
+
+    contact.delete_instance()
+    await ctx.send(f"Successfully removed {data}.")
 
 
 if __name__ == "__main__":

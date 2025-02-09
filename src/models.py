@@ -12,11 +12,15 @@ class BaseModel(Model):
 class User(BaseModel):
     user_id = CharField(primary_key=True)
 
+
 class Character(BaseModel):
     character_id = CharField(primary_key=True)
-    subscribed = BooleanField(default=True)
     user = ForeignKeyField(User, backref='characters')
     token = TextField()
+
+
+class ExternalContact(BaseModel):
+    contact_id = CharField(primary_key=True)
 
 
 class Challenge(BaseModel):
@@ -26,4 +30,4 @@ class Challenge(BaseModel):
 
 def initialize_database():
     with db:
-        db.create_tables([User, Character, Challenge])
+        db.create_tables([User, Character, ExternalContact, Challenge])
