@@ -184,31 +184,63 @@ async def info(ctx):
         await ctx.send(f"You do not have rights to display all info.")
         return
 
+    user_responses = []
     users = User.select()
     if not users.exists():
-        await ctx.send("No users registered.")
-        return
+        user_responses.append(f"<no users registered>")
+    else:
+        for user in users:
+            character_names = []
+            for character in user.characters:
+                authed_preston = with_refresh(base_preston, character.token)
+                character_name = authed_preston.whoami()["CharacterName"]
+                character_names.append(f" - {character_name}")
 
-    user_responses = []
-    for user in users:
-
-        character_names = []
-        for character in user.characters:
-            authed_preston = with_refresh(base_preston, character.token)
-            character_name = authed_preston.whoami()["CharacterName"]
-            character_names.append(f" - {character_name}")
-
-        if character_names:
-            character_names_body = "\n".join(character_names)
-        else:
-            character_names_body = "\n<no authorized characters>"
-        user_responses.append(f"### User <@{user.user_id}>\n{character_names_body}")
+            if character_names:
+                character_names_body = "\n".join(character_names)
+            else:
+                character_names_body = "\n<no authorized characters>"
+            user_responses.append(f"### User <@{user.user_id}>\n{character_names_body}")
 
     if user_responses:
         user_responses_body = "\n".join(user_responses)
     else:
         user_responses_body = "<no authorized users>"
+
     response = f"## Users\n{user_responses_body}"
+
+    # Deal with externally linked Characters, Corporations or Alliances
+    external_response = []
+    externals = ExternalContact.select()
+    if not externals.exists():
+        external_response.append(f"<no users registered>")
+    else:
+
+        results = base_preston.post_op(
+            "post_universe_names",
+            path_data={"datasource": "tranquility"}, # Added because Preston is broken
+            post_data=[e.contact_id for e in externals],
+        )
+
+        for external_type in ["character", "corporation", "alliance"]:
+            externals_per_type = []
+            for result in results:
+                if result.get("category") == external_type:
+                    externals_per_type.append(f" - {result.get('name')}")
+
+            if externals_per_type:
+                external_type_body = "\n".join(externals_per_type)
+            else:
+                external_type_body = f"<no authorized {external_type}s>"
+
+            external_response.append(f"### External {external_type.capitalize()}s\n{external_type_body}")
+
+    if external_response:
+        external_response_body = "\n".join(external_response)
+    else:
+        external_response_body = "<no external contacts>"
+
+    response += f"\n## Externals\n{external_response_body}"
 
     await send_large_message(ctx, response, allowed_mentions=discord.AllowedMentions(users=False))
 
@@ -388,13 +420,13 @@ async def add_external(ctx, *args):
         contact_id=contact_id,
     )
 
-
     add_external_contact(contact_id)
 
     if created:
-        await ctx.send(f"Successfully added {data} as a contact." )
+        await ctx.send(f"Successfully added {data} as a contact.")
     else:
-        await ctx.send(f"Successfully re-added {data} as a contact." )
+        await ctx.send(f"Successfully re-added {data} as a contact.")
+
 
 @bot.command()
 @command_error_handler
