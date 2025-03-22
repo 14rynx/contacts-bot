@@ -31,7 +31,7 @@ TLDR: Create an env file and fill it in with the CCP and Discord info, then run 
 
 4. Head over to the [Eve onlone Developers Page](https://developers.eveonline.com/) and create yourself an application.
     - Under "Application Type" select "Authentication & API Access"
-    - Under "Permissions" add `esi-corporations.read_structures.v1
+    - Under "Permissions" add `esi-characters.read_contacts.v1` and `esi-characters.write_contacts.v1`
     - Under "Callback URL" set `https://yourdomain.com/callback/` (obviously replace your domain)
 
     Now view the application and copy the values `CCP_REDIRECT_URI`, `CCP_CLIENT_ID` and `CCP_SECRET_KEY` to your .env file.
