@@ -55,8 +55,8 @@ async def info(interaction: discord.Interaction):
     if interaction.user.id != int(os.getenv("ADMIN")):
         await interaction.response.send_message("You do not have rights to display all info.", ephemeral=True)
         return
-    else:
-        await interaction.response.send_message("Fetching all characters...", ephemeral=True)
+
+    await interaction.response.defer(ephemeral=True)
 
     user_responses = []
     dead_characters = []
@@ -145,7 +145,7 @@ async def characters(interaction: discord.Interaction):
         await interaction.response.send_message("You are not a registered user.")
         return
 
-    await interaction.response.send_message("Fetching all characters...", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
 
     for character in user.characters:
         try:
@@ -199,7 +199,7 @@ async def kick(interaction: Interaction, member: discord.Member):
         await interaction.response.send_message("You do not have rights to kick users.")
         return
 
-    await interaction.response.send_message(f"Kicking {member.mention} ...", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
 
     user = User.get_or_none(User.user_id == str(member.id))
     if user is None:
@@ -270,12 +270,12 @@ async def revoke(interaction: Interaction, character_name: str | None = None):
         return
 
     if character_name is None:
-        await interaction.response.send_message(f"Revoking all your characters ...", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
 
         user_characters = Character.select().where(Character.user == user)
         if user_characters:
             for character in user_characters:
-                remove_contact(character)
+                remove_contact(character, base_preston)
                 character.delete_instance()
 
         user.delete_instance()
@@ -372,7 +372,7 @@ async def remove_external(
     remove_external_contact(contact_id, base_preston)
 
     contact.delete_instance()
-    await interaction.response.send_message(f"Successfully removed {entity_name}.", ephemeral=Tru)
+    await interaction.response.send_message(f"Successfully removed {entity_name}.", ephemeral=True)
 
 
 if __name__ == "__main__":
