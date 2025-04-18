@@ -2,14 +2,17 @@ import functools
 import logging
 import os
 import secrets
+from typing import Literal
 
 import discord
+from discord import Interaction, app_commands
 from discord.ext import commands
 from preston import Preston
+from requests.exceptions import HTTPError
 
 from callback_server import callback_server
 from models import initialize_database, User, Challenge, Character, ExternalContact
-from utils import lookup, send_large_message
+from utils import lookup
 
 # Configure the logger
 logger = logging.getLogger('discord.main')
@@ -52,14 +55,13 @@ def command_error_handler(func):
 
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
-        ctx = args[0]
-        logger.info(f"{ctx.author.name} used !{func.__name__}")
+        interaction, *arguments = args
+        logger.info(f"{interaction.user.name} used !{func.__name__} {arguments} {kwargs}")
 
         try:
             return await func(*args, **kwargs)
         except Exception as e:
             logger.error(f"Error in !{func.__name__} command: {e}", exc_info=True)
-            await ctx.send(f"An error occurred in !{func.__name__}.")
 
     return wrapper
 
@@ -116,13 +118,25 @@ def delete_character_contacts(preston: Preston, character_id: str, contacts_to_d
 
 def remove_contact(this_character: Character):
     """Add all required contacts for a new linked character."""
-    this_char_authed_preston = with_refresh(base_preston, this_character.token)
+    try:
+        this_char_authed_preston = with_refresh(base_preston, this_character.token)
+    except HTTPError as exp:
+        if exp.response.status_code == 401:
+            return
+        else:
+            raise
 
     contract_ids = set()
 
     # Delete this contact for other characters
     for character in Character.select().where(Character.character_id != this_character.character_id):
-        authed_preston = with_refresh(base_preston, character.token)
+        try:
+            authed_preston = with_refresh(base_preston, character.token)
+        except HTTPError as exp:
+            if exp.response.status_code == 401:
+                continue
+            else:
+                raise
         delete_character_contacts(authed_preston, character.character_id, {this_character.character_id})
         contract_ids.add(character.character_id)
 
@@ -142,12 +156,24 @@ def add_contact(this_character: Character):
     # Got through registered characters and add this contact
     character_ids = set()
     for character in Character.select().where(Character.character_id != this_character.character_id):
-        authed_preston = with_refresh(base_preston, character.token)
+        try:
+            authed_preston = with_refresh(base_preston, character.token)
+        except HTTPError as exp:
+            if exp.response.status_code == 401:
+                continue
+            else:
+                raise
         add_character_contacts(authed_preston, character.character_id, {this_character.character_id})
         character_ids.add(character.character_id)
 
     # Add contacts to this character
-    this_char_authed_preston = with_refresh(base_preston, this_character.token)
+    try:
+        this_char_authed_preston = with_refresh(base_preston, this_character.token)
+    except HTTPError as exp:
+        if exp.response.status_code == 401:
+            return
+        else:
+            raise
     add_character_contacts(this_char_authed_preston, this_character.character_id, character_ids)
 
     # Add external contacts to this
@@ -160,31 +186,52 @@ def add_contact(this_character: Character):
 def add_external_contact(contact_id: str):
     """Add external contact to all characters"""
     for character in Character.select():
-        authed_preston = with_refresh(base_preston, character.token)
+        try:
+            authed_preston = with_refresh(base_preston, character.token)
+        except HTTPError as exp:
+            if exp.response.status_code == 401:
+                continue
+            else:
+                raise
         add_character_contacts(authed_preston, character.character_id, {contact_id})
 
 
 def delete_external_contact(contact_id: str):
     """Add external contact to all characters"""
     for character in Character.select():
-        authed_preston = with_refresh(base_preston, character.token)
+        try:
+            authed_preston = with_refresh(base_preston, character.token)
+        except HTTPError as exp:
+            if exp.response.status_code == 401:
+                continue
+            else:
+                raise
         delete_character_contacts(authed_preston, character.character_id, {contact_id})
 
 
 @bot.event
 async def on_ready():
+    logger.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    try:
+        synced = await bot.tree.sync()
+        logger.info(f"Synced {len(synced)} slash commands.")
+    except Exception as e:
+        logger.error(f"Failed to sync commands: {e}", exc_info=True)
     callback_server.start(base_preston, add_contact)
 
 
-@bot.command()
+@bot.tree.command(name="info", description="Returns a list of currently registered users and characters.")
 @command_error_handler
-async def info(ctx):
+async def info(interaction: discord.Interaction):
     """Returns a list of currently registered users and characters."""
-    if not ctx.author.id == int(os.getenv("ADMIN")):
-        await ctx.send(f"You do not have rights to display all info.")
+    if interaction.user.id != int(os.getenv("ADMIN")):
+        await interaction.response.send_message("You do not have rights to display all info.", ephemeral=True)
         return
+    else:
+        await interaction.response.send_message("Fetching all characters...", ephemeral=True)
 
     user_responses = []
+    dead_characters = []
     users = User.select()
     if not users.exists():
         user_responses.append(f"<no users registered>")
@@ -192,7 +239,15 @@ async def info(ctx):
         for user in users:
             character_names = []
             for character in user.characters:
-                authed_preston = with_refresh(base_preston, character.token)
+                try:
+                    authed_preston = with_refresh(base_preston, character.token)
+                except HTTPError as exp:
+                    character_name = base_preston.get_op(
+                        "get_characters_character_id",
+                        character_id=character.character_id
+                    ).get("name")
+                    dead_characters.append(f" - {character_name}")
+                    continue
                 character_name = authed_preston.whoami()["CharacterName"]
                 character_names.append(f" - {character_name}")
 
@@ -203,11 +258,16 @@ async def info(ctx):
             user_responses.append(f"### User <@{user.user_id}>\n{character_names_body}")
 
     if user_responses:
-        user_responses_body = "\n".join(user_responses)
+        user_responses_body = "## Users\n"
+        user_responses_body += "\n".join(user_responses)
     else:
         user_responses_body = "<no authorized users>"
 
-    response = f"## Users\n{user_responses_body}"
+    if dead_characters:
+        dead_character_response_body = "\n## Characters with broken permissions\n"
+        dead_character_response_body += "\n".join(dead_characters)
+    else:
+        dead_character_response_body = ""
 
     # Deal with externally linked Characters, Corporations or Alliances
     external_response = []
@@ -218,7 +278,7 @@ async def info(ctx):
 
         results = base_preston.post_op(
             "post_universe_names",
-            path_data={"datasource": "tranquility"}, # Added because Preston is broken
+            path_data={"datasource": "tranquility"},  # Added because Preston is broken
             post_data=[e.contact_id for e in externals],
         )
 
@@ -236,101 +296,120 @@ async def info(ctx):
             external_response.append(f"### External {external_type.capitalize()}s\n{external_type_body}")
 
     if external_response:
-        external_response_body = "\n".join(external_response)
+        external_response_body = "\n## Externals\n"
+        external_response_body += "\n".join(external_response)
     else:
-        external_response_body = "<no external contacts>"
+        external_response_body = ""
 
-    response += f"\n## Externals\n{external_response_body}"
+    response = f"{user_responses_body}{dead_character_response_body}{external_response_body}"
 
-    await send_large_message(ctx, response, allowed_mentions=discord.AllowedMentions(users=False))
+    await interaction.followup.send(response, ephemeral=True)
 
 
-@bot.command()
+@bot.tree.command(name="characters", description="Displays your currently authorized characters..")
 @command_error_handler
-async def characters(ctx):
-    """Displays your currently authorized characters."""
-
+async def characters(interaction: discord.Interaction):
     character_names = []
-    user = User.get_or_none(User.user_id == str(ctx.author.id))
+    dead_characters = []
+
+    user = User.get_or_none(User.user_id == str(interaction.user.id))
     if user is None:
-        await ctx.send("You are not a registered user.")
+        await interaction.response.send_message("You are not a registered user.")
         return
 
+    await interaction.response.send_message("Fetching all characters...", ephemeral=True)
+
     for character in user.characters:
-        char_auth = with_refresh(base_preston, character.token)
+        try:
+            char_auth = with_refresh(base_preston, character.token)
+        except HTTPError as exp:
+            if exp.response.status_code == 401:
+                dead_characters.append(character.character_id)
+                continue
+            else:
+                raise
         character_name = char_auth.whoami()['CharacterName']
         character_names.append(f"- {character_name}")
 
     if character_names:
-        character_names_body = "\n".join(character_names)
+        character_names_body = "## Characters"
+        character_names_body += "\n".join(character_names)
     else:
         character_names_body = "<no authorized characters>"
-    response = f"## Characters\n{character_names_body}"
 
-    await send_large_message(ctx, response)
+    if dead_characters:
+        dead_character_response_body = "\n## Characters with broken permissions"
+        dead_character_response_body += "\n".join(dead_characters)
+    else:
+        dead_character_response_body = ""
+
+    response = f"{character_names_body}{dead_character_response_body}"
+
+    await interaction.followup.send(response, ephemeral=True)
 
 
-@bot.command()
-@command_error_handler
-async def invite(ctx, member: discord.Member):
-    """Adds a user to be able to register characters."""
-    if not ctx.author.id == int(os.getenv("ADMIN")):
-        await ctx.send(f"You do not have rights to invite users.")
+@bot.tree.command(name="invite", description="Adds a user to be able to register characters.")
+async def invite(interaction: Interaction, member: discord.Member):
+    """Slash command to invite a user to register characters."""
+    if interaction.user.id != int(os.getenv("ADMIN")):
+        await interaction.response.send_message("You do not have rights to invite users.")
         return
 
     user, created = User.get_or_create(user_id=str(member.id))
 
     if created:
-        await ctx.send(f"Invited {member}.")
+        await interaction.response.send_message(f"Invited {member.mention}.", ephemeral=True)
     else:
-        await ctx.send(f"{member} was already invited")
+        await interaction.response.send_message(f"{member.mention} was already invited.", ephemeral=True)
 
 
-@bot.command()
+@bot.tree.command(name="kick", description="Removes a user and their characters from contacts.")
 @command_error_handler
-async def kick(ctx, member: discord.Member):
-    """Removes a user and their characters from contacts."""
-    if not ctx.author.id == int(os.getenv("ADMIN")):
-        await ctx.send(f"You do not have rights to kick users.")
+async def kick(interaction: Interaction, member: discord.Member):
+    """Slash command to remove a user and their characters from the system."""
+    if interaction.user.id != int(os.getenv("ADMIN")):
+        await interaction.response.send_message("You do not have rights to kick users.")
         return
 
-    await ctx.send(f"Kicking {member} ...")
+    await interaction.response.send_message(f"Kicking {member.mention} ...", ephemeral=True)
 
     user = User.get_or_none(User.user_id == str(member.id))
-
     if user is None:
-        await ctx.send("User not found.")
+        await interaction.followup.send("User not found.", ephemeral=True)
         return
 
-    # Remove contacts from all other characters
     removed_character_names = []
     for character in user.characters:
         remove_contact(character)
-        char_auth = with_refresh(base_preston, character.token)
+        try:
+            char_auth = with_refresh(base_preston, character.token)
+        except HTTPError as exp:
+            if exp.response.status_code == 401:
+                await interaction.followup.send("ESI permissions broken.", ephemeral=True)
+                return
+            else:
+                raise
         character_name = char_auth.whoami()['CharacterName']
         character.delete_instance()
         removed_character_names.append(character_name)
 
-    # Delete User
     user.delete_instance()
 
-    # Send output of what was removes
-    response = f"Removed the user <@{user.user_id}> and his characters:\n"
+    response = f"Removed the user <@{member.id}> and their characters:\n"
     for character_name in removed_character_names:
         response += f" - {character_name}\n"
-    await send_large_message(ctx, response)
+
+    await interaction.followup.send(response, ephemeral=True)
 
 
-@bot.command()
+@bot.tree.command(name="auth", description="Sends you an authorization link for characters.")
 @command_error_handler
-async def auth(ctx):
-    """Sends you an authorization link for characters."""
-
+async def auth(interaction: Interaction):
     secret_state = secrets.token_urlsafe(60)
 
-    user = User.get_or_none(user_id=str(ctx.author.id))
+    user = User.get_or_none(user_id=str(interaction.user.id))
     if user is None:
-        await ctx.send(
+        await interaction.response.send_message(
             f"You do not have access to this bot, contact <@{os.getenv('ADMIN')}> so he allows you to register characters."
         )
         return
@@ -339,24 +418,31 @@ async def auth(ctx):
     Challenge.create(user=user, state=secret_state)
 
     full_link = f"{base_preston.get_authorize_url()}&state={secret_state}"
-    await ctx.author.send(f"Use this [authentication link]({full_link}) to authorize your characters.")
+    await interaction.response.send_message(
+        f"Use this [authentication link]({full_link}) to authorize your characters.", ephemeral=True)
 
 
-@bot.command()
+@bot.tree.command(
+    name="revoke",
+    description="Revokes ESI access for your characters."
+)
+@app_commands.describe(
+    character_name="Name of the character to revoke, revoke all if empty."
+)
 @command_error_handler
-async def revoke(ctx, *args):
+async def revoke(interaction: Interaction, character_name: str | None = None):
     """Revokes ESI access for your characters.
     :args: Character that you want to revoke access to.
     If no arguments are provided, revokes all characters."""
 
-    user = User.get_or_none(User.user_id == str(ctx.author.id))
+    user = User.get_or_none(User.user_id == str(interaction.user.id))
 
     if user is None:
-        await ctx.send(f"You did not have any authorized characters in the first place.")
+        await interaction.response.send_message(f"You did not have any authorized characters in the first place.")
         return
 
-    if len(args) == 0:
-        await ctx.send(f"Revoking all your characters ...")
+    if character_name is None:
+        await interaction.response.send_message(f"Revoking all your characters ...", ephemeral=True)
 
         user_characters = Character.select().where(Character.user == user)
         if user_characters:
@@ -365,55 +451,47 @@ async def revoke(ctx, *args):
                 character.delete_instance()
 
         user.delete_instance()
-        await ctx.send(f"Successfully revoked access to all your characters.")
+        await interaction.followup.send(f"Successfully revoked access to all your characters.", ephemeral=True)
         return
 
     else:
         try:
-            character_id = await lookup(base_preston, " ".join(args), return_type="characters")
+            character_id = await lookup(base_preston, character_name, return_type="characters")
         except ValueError:
-            args_concatenated = " ".join(args)
-            await ctx.send(f"Args `{args_concatenated}` could not be parsed or looked up.")
+            await interaction.response.send_message(f"Args `{character_name}` could not be parsed or looked up.")
             return
         character = user.characters.select().where(Character.character_id == character_id).first()
         if not character:
-            await ctx.send("You have no character with that name linked.")
+            await interaction.response.send_message("You have no character with that name linked.")
             return
 
         remove_contact(character)
         character.delete_instance()
-        await ctx.send(f"Successfully removed " + " ".join(args) + ".")
+        await interaction.response.send_message(f"Successfully removed {character_name}.", ephemeral=True)
 
 
-@bot.command()
+@bot.tree.command(
+    name="add_external",
+    description="Add an external character, corporation, or alliance to contacts."
+)
+@app_commands.describe(
+    entity_type="Type of entity to add.",
+    entity_name="Name of the character, corporation, or alliance to add."
+)
 @command_error_handler
-async def add_external(ctx, *args):
-    """Add an external (unauthenticated) character / corporation / alliance to all characters
-    Use -c or --corporation for corporations and -a or --alliance for alliances."""
-
-    if not ctx.author.id == int(os.getenv("ADMIN")):
-        await ctx.send(f"You do not have rights to add external contacts.")
+async def add_external(
+        interaction: Interaction,
+        entity_type: Literal["character", "corporation", "alliance"],
+        entity_name: str
+):
+    if not interaction.user.id == int(os.getenv("ADMIN")):
+        await interaction.response.send_message(f"You do not have rights to add external contacts.")
         return
-
-    if len(args) == 0:
-        await ctx.send("Please provide a character / corporation / alliance.")
-        return
-
-    if args[0] in ["-c", "--corporation"]:
-        return_type = "corporations"
-        data = " ".join(args[1:])
-    elif args[0] in ["-a", "--alliance"]:
-        return_type = "alliances"
-        data = " ".join(args[1:])
-    else:
-        return_type = "characters"
-        data = " ".join(args)
 
     try:
-        contact_id = await lookup(base_preston, data, return_type=return_type)
+        contact_id = await lookup(base_preston, entity_name, return_type=entity_type + "s")
     except ValueError:
-        args_concatenated = " ".join(args)
-        await ctx.send(f"Args `{args_concatenated}` could not be parsed or looked up.")
+        await interaction.response.send_message(f"Args `{entity_name}` could not be parsed or looked up.")
         return
 
     contact, created = ExternalContact.get_or_create(
@@ -423,39 +501,34 @@ async def add_external(ctx, *args):
     add_external_contact(contact_id)
 
     if created:
-        await ctx.send(f"Successfully added {data} as a contact.")
+        await interaction.response.send_message(f"Successfully added {entity_name} as a contact.", ephemeral=True)
     else:
-        await ctx.send(f"Successfully re-added {data} as a contact.")
+        await interaction.response.send_message(f"Successfully re-added {entity_name} as a contact.", ephemeral=True)
 
 
-@bot.command()
+@bot.tree.command(
+    name="remove_external",
+    description="Remove an external (unauthenticated) character / corporation / alliance from contacts."
+)
+@app_commands.describe(
+    entity_type="Type of entity to remove.",
+    entity_name="Name of the character, corporation, or alliance to remove."
+)
 @command_error_handler
-async def remove_external(ctx, *args):
-    """Remove an external (unauthenticated) character / corporation / alliance to all characters
-    Use -c or --corporation for corporations and -a or --alliance for alliances."""
-    if not ctx.author.id == int(os.getenv("ADMIN")):
-        await ctx.send(f"You do not have rights to remove external contacts.")
+async def remove_external(
+        interaction: Interaction,
+        entity_type: Literal["character", "corporation", "alliance"],
+        entity_name: str
+):
+    """"""
+    if not interaction.user.id == int(os.getenv("ADMIN")):
+        await interaction.response.send_message(f"You do not have rights to add external contacts.")
         return
-
-    if len(args) == 0:
-        await ctx.send("Please provide a character / corporation / alliance.")
-        return
-
-    if args[0] in ["-c", "--corporation"]:
-        return_type = "corporations"
-        data = " ".join(args[1:])
-    elif args[0] in ["-a", "--alliance"]:
-        return_type = "alliances"
-        data = " ".join(args[1:])
-    else:
-        return_type = "characters"
-        data = " ".join(args)
 
     try:
-        contact_id = await lookup(base_preston, data, return_type=return_type)
+        contact_id = await lookup(base_preston, entity_name, return_type=entity_type + "s")
     except ValueError:
-        args_concatenated = " ".join(args)
-        await ctx.send(f"Args `{args_concatenated}` could not be parsed or looked up.")
+        await interaction.response.send_message(f"Args `{entity_name}` could not be parsed or looked up.")
         return
 
     contact = ExternalContact.get_or_none(
@@ -463,13 +536,15 @@ async def remove_external(ctx, *args):
     )
 
     if contact is None:
-        await ctx.send(f"{data} was not added and thus can not be removed.")
+        await interaction.response.send_message(
+            f"{entity_name} was not added and thus can not be removed.", ephemeral=True
+        )
         return
 
     delete_external_contact(contact_id)
 
     contact.delete_instance()
-    await ctx.send(f"Successfully removed {data}.")
+    await interaction.response.send_message(f"Successfully removed {entity_name}.", ephemeral=Tru)
 
 
 if __name__ == "__main__":

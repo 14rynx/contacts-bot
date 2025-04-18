@@ -1,5 +1,5 @@
 requests
 Pyyaml
-preston
+preston @ git+https://github.com/14rynx/Preston@retry
 discord
 peewee
