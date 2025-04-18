@@ -1,4 +1,3 @@
-import functools
 import logging
 import os
 import secrets
@@ -12,17 +11,12 @@ from requests.exceptions import HTTPError
 
 from callback_server import callback_server
 from models import initialize_database, User, Challenge, Character, ExternalContact
-from utils import lookup
+from contacts import add_contact, remove_contact, add_external_contact, remove_external_contact
+from utils import lookup, command_error_handler, with_refresh
 
 # Configure the logger
 logger = logging.getLogger('discord.main')
 logger.setLevel(logging.INFO)
-
-# Standing to set for Contacts created by this bot
-BOT_STANDING = float(os.getenv("STANDING", 5.5))
-if BOT_STANDING in [-10, -5, 0, 5, 10]:
-    logger.error("The standing value must not be a value able to set by players.")
-    exit(1)
 
 # Initialize the database
 initialize_database()
@@ -41,172 +35,6 @@ intent = discord.Intents.default()
 intent.messages = True
 intent.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intent)
-
-
-def with_refresh(preston_instance: Preston, refresh_token: str):
-    new_kwargs = dict(preston_instance._kwargs)
-    new_kwargs["refresh_token"] = refresh_token
-    new_kwargs["access_token"] = None
-    return Preston(**new_kwargs)
-
-
-def command_error_handler(func):
-    """Decorator for handling bot command logging and exceptions."""
-
-    @functools.wraps(func)
-    async def wrapper(*args, **kwargs):
-        interaction, *arguments = args
-        logger.info(f"{interaction.user.name} used !{func.__name__} {arguments} {kwargs}")
-
-        try:
-            return await func(*args, **kwargs)
-        except Exception as e:
-            logger.error(f"Error in !{func.__name__} command: {e}", exc_info=True)
-
-    return wrapper
-
-
-def add_character_contacts(preston: Preston, character_id: str, contacts_to_add: set[str]):
-    """Add contracts for a character while not overwriting existing contracts"""
-
-    contacts = preston.get_op(
-        "get_characters_character_id_contacts",
-        character_id=str(character_id)
-    )
-
-    existing_contracts = {str(c['contact_id']) for c in contacts if c.get('standing') > BOT_STANDING}
-    contacts_to_add -= existing_contracts
-
-    if len(contacts_to_add) == 0:
-        return
-
-    preston.post_op(
-        'post_characters_character_id_contacts',
-        path_data={
-            "character_id": character_id,
-            "standing": BOT_STANDING,
-            "watched": False,
-        },
-        post_data=list(contacts_to_add),
-    )
-
-
-def delete_character_contacts(preston: Preston, character_id: str, contacts_to_delete: set[str]):
-    """Delete contacts for a character while keeping contracts not by the bot"""
-    contacts = preston.get_op(
-        "get_characters_character_id_contacts",
-        character_id=str(character_id)
-    )
-
-    contacts_with_wrong_standing = set(
-        str(c['contact_id']) for c in contacts if
-        c.get('standing') < BOT_STANDING - 1e-3 or c.get('standing') > BOT_STANDING + 1e-3
-    )
-    contacts_to_delete -= contacts_with_wrong_standing
-
-    if len(contacts_to_delete) == 0:
-        return
-
-    preston.delete_op(
-        "delete_characters_character_id_contacts",
-        path_data={
-            "character_id": str(character_id),
-            "contact_ids": list(contacts_to_delete),
-        },
-    )
-
-
-def remove_contact(this_character: Character):
-    """Add all required contacts for a new linked character."""
-    try:
-        this_char_authed_preston = with_refresh(base_preston, this_character.token)
-    except HTTPError as exp:
-        if exp.response.status_code == 401:
-            return
-        else:
-            raise
-
-    contract_ids = set()
-
-    # Delete this contact for other characters
-    for character in Character.select().where(Character.character_id != this_character.character_id):
-        try:
-            authed_preston = with_refresh(base_preston, character.token)
-        except HTTPError as exp:
-            if exp.response.status_code == 401:
-                continue
-            else:
-                raise
-        delete_character_contacts(authed_preston, character.character_id, {this_character.character_id})
-        contract_ids.add(character.character_id)
-
-    # Delete related contacts of this character
-    delete_character_contacts(this_char_authed_preston, this_character.character_id, contract_ids)
-
-    # Delete external contacts of this character
-    external_contract_ids = set()
-    for external_contact in ExternalContact.select():
-        external_contract_ids.add(external_contact.contact_id)
-    delete_character_contacts(this_char_authed_preston, this_character.character_id, external_contract_ids)
-
-
-def add_contact(this_character: Character):
-    """Remove all required contacts for a linked character"""
-
-    # Got through registered characters and add this contact
-    character_ids = set()
-    for character in Character.select().where(Character.character_id != this_character.character_id):
-        try:
-            authed_preston = with_refresh(base_preston, character.token)
-        except HTTPError as exp:
-            if exp.response.status_code == 401:
-                continue
-            else:
-                raise
-        add_character_contacts(authed_preston, character.character_id, {this_character.character_id})
-        character_ids.add(character.character_id)
-
-    # Add contacts to this character
-    try:
-        this_char_authed_preston = with_refresh(base_preston, this_character.token)
-    except HTTPError as exp:
-        if exp.response.status_code == 401:
-            return
-        else:
-            raise
-    add_character_contacts(this_char_authed_preston, this_character.character_id, character_ids)
-
-    # Add external contacts to this
-    external_contract_ids = set()
-    for external_contact in ExternalContact.select():
-        external_contract_ids.add(external_contact.contact_id)
-    add_character_contacts(this_char_authed_preston, this_character.character_id, external_contract_ids)
-
-
-def add_external_contact(contact_id: str):
-    """Add external contact to all characters"""
-    for character in Character.select():
-        try:
-            authed_preston = with_refresh(base_preston, character.token)
-        except HTTPError as exp:
-            if exp.response.status_code == 401:
-                continue
-            else:
-                raise
-        add_character_contacts(authed_preston, character.character_id, {contact_id})
-
-
-def delete_external_contact(contact_id: str):
-    """Add external contact to all characters"""
-    for character in Character.select():
-        try:
-            authed_preston = with_refresh(base_preston, character.token)
-        except HTTPError as exp:
-            if exp.response.status_code == 401:
-                continue
-            else:
-                raise
-        delete_character_contacts(authed_preston, character.character_id, {contact_id})
 
 
 @bot.event
@@ -380,7 +208,7 @@ async def kick(interaction: Interaction, member: discord.Member):
 
     removed_character_names = []
     for character in user.characters:
-        remove_contact(character)
+        remove_contact(character, base_preston)
         try:
             char_auth = with_refresh(base_preston, character.token)
         except HTTPError as exp:
@@ -498,7 +326,7 @@ async def add_external(
         contact_id=contact_id,
     )
 
-    add_external_contact(contact_id)
+    add_external_contact(contact_id, base_preston)
 
     if created:
         await interaction.response.send_message(f"Successfully added {entity_name} as a contact.", ephemeral=True)
@@ -541,7 +369,7 @@ async def remove_external(
         )
         return
 
-    delete_external_contact(contact_id)
+    remove_external_contact(contact_id, base_preston)
 
     contact.delete_instance()
     await interaction.response.send_message(f"Successfully removed {entity_name}.", ephemeral=Tru)

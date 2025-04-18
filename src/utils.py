@@ -1,3 +1,11 @@
+import logging
+
+from preston import Preston
+
+logger = logging.getLogger("discord.main.utils")
+import functools
+
+
 async def lookup(preston, string, return_type):
     """Tries to find an ID related to the input.
 
@@ -27,45 +35,24 @@ async def lookup(preston, string, return_type):
             raise ValueError("Could not parse that character!")
 
 
-async def send_large_message(ctx, message, max_chars=1994, **kwargs):
-    open_code_block = False
+def with_refresh(preston_instance: Preston, refresh_token: str):
+    new_kwargs = dict(preston_instance._kwargs)
+    new_kwargs["refresh_token"] = refresh_token
+    new_kwargs["access_token"] = None
+    return Preston(**new_kwargs)
 
-    while len(message) > 0:
-        # If the remaining message fits within max_chars, send it as is
-        if len(message) <= max_chars:
-            # Prepend message if the previous one ended with an open code-block
-            if open_code_block:
-                message = f"```{message}"
 
-            await ctx.send(message, **kwargs)
-            break
+def command_error_handler(func):
+    """Decorator for handling bot command logging and exceptions."""
 
-        # Find the last newline within the max_chars limit
-        last_newline_index = message.rfind('\n', 0, max_chars)
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        interaction, *arguments = args
+        logger.info(f"{interaction.user.name} used !{func.__name__} {arguments} {kwargs}")
 
-        # If no newline found within limit, cut at max_chars
-        if last_newline_index == -1:
-            part = message[:max_chars]
-            message = message[max_chars:]
-        else:
-            part = message[:last_newline_index]
-            message = message[last_newline_index + 1:]
+        try:
+            return await func(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"Error in !{func.__name__} command: {e}", exc_info=True)
 
-        # Count the number of backticks to see if the split ends in a codeblock
-        code_block_count = part.count("```")
-
-        # Prepend message if the previous one ended with an open code-block
-        if open_code_block:
-            part = f"```{part}"
-
-        # Toggle if we are in a code-block
-        if code_block_count % 2 == 1:
-            open_code_block = not open_code_block
-
-        # Post-pend message if we are still in a code-block
-        if open_code_block:
-            part = f"{part}```"
-
-        # Send the current part
-        await ctx.send(part, **kwargs)
-
+    return wrapper

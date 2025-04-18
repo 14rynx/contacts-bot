@@ -17,7 +17,7 @@ async def callback_server(preston: Preston, add_contacts):
     routes = web.RouteTableDef()
 
     async def async_add_contacts(character):
-        add_contacts(character)
+        add_contacts(character, preston)
 
     @routes.get('/')
     async def hello(request):
