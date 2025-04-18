@@ -1,5 +1,5 @@
 requests
 Pyyaml
-preston @ git+https://github.com/14rynx/Preston@delete_op
+preston
 discord
 peewee
