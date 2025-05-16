@@ -10,9 +10,9 @@ from preston import Preston
 from requests.exceptions import HTTPError
 
 from callback_server import callback_server
-from models import initialize_database, User, Challenge, Character, ExternalContact
 from contacts import add_contact, remove_contact, add_external_contact, remove_external_contact
-from utils import lookup, command_error_handler, with_refresh
+from models import initialize_database, User, Challenge, Character, ExternalContact
+from utils import lookup, command_error_handler
 
 # Configure the logger
 logger = logging.getLogger('discord.main')
@@ -21,6 +21,14 @@ logger.setLevel(logging.INFO)
 # Initialize the database
 initialize_database()
 
+
+def token_callback(preston):
+    character_id = preston.whoami()["character_id"]
+    character = Character.get(character_id=character_id)
+    character.token = preston.refresh_token
+    character.save()
+
+
 # Setup ESI connection
 base_preston = Preston(
     user_agent="Contacts organizing discord bot by larynx.austrene@gmail.com",
@@ -28,13 +36,14 @@ base_preston = Preston(
     client_secret=os.environ["CCP_SECRET_KEY"],
     callback_url=os.environ["CCP_REDIRECT_URI"],
     scope="esi-characters.read_contacts.v1 esi-characters.write_contacts.v1",
+    refresh_token_callback=token_callback,
 )
 
 # Setup Discord
-intent = discord.Intents.default()
-intent.messages = True
-intent.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intent)
+intents = discord.Intents.default()
+intents.messages = True
+intents.message_content = True
+bot = commands.Bot(command_prefix="/", intents=intents)
 
 
 @bot.event
@@ -68,7 +77,7 @@ async def info(interaction: discord.Interaction):
             character_names = []
             for character in user.characters:
                 try:
-                    authed_preston = with_refresh(base_preston, character.token)
+                    authed_preston = base_preston.authenticate_from_token(character.token)
                 except HTTPError as exp:
                     character_name = base_preston.get_op(
                         "get_characters_character_id",
@@ -76,7 +85,7 @@ async def info(interaction: discord.Interaction):
                     ).get("name")
                     dead_characters.append(f" - {character_name}")
                     continue
-                character_name = authed_preston.whoami()["CharacterName"]
+                character_name = authed_preston.whoami()["character_name"]
                 character_names.append(f" - {character_name}")
 
             if character_names:
@@ -149,14 +158,14 @@ async def characters(interaction: discord.Interaction):
 
     for character in user.characters:
         try:
-            char_auth = with_refresh(base_preston, character.token)
+            char_auth = base_preston.authenticate_from_token(character.token)
         except HTTPError as exp:
             if exp.response.status_code == 401:
                 dead_characters.append(character.character_id)
                 continue
             else:
                 raise
-        character_name = char_auth.whoami()['CharacterName']
+        character_name = char_auth.whoami()['character_name']
         character_names.append(f"- {character_name}")
 
     if character_names:
@@ -210,14 +219,14 @@ async def kick(interaction: Interaction, member: discord.Member):
     for character in user.characters:
         remove_contact(character, base_preston)
         try:
-            char_auth = with_refresh(base_preston, character.token)
+            char_auth = base_preston.authenticate_from_token(character.token)
         except HTTPError as exp:
             if exp.response.status_code == 401:
                 await interaction.followup.send("ESI permissions broken.", ephemeral=True)
                 return
             else:
                 raise
-        character_name = char_auth.whoami()['CharacterName']
+        character_name = char_auth.whoami()['character_name']
         character.delete_instance()
         removed_character_names.append(character_name)
 
@@ -245,7 +254,7 @@ async def auth(interaction: Interaction):
     Challenge.delete().where(Challenge.user == user).execute()
     Challenge.create(user=user, state=secret_state)
 
-    full_link = f"{base_preston.get_authorize_url()}&state={secret_state}"
+    full_link = f"{base_preston.get_authorize_url(secret_state)}"
     await interaction.response.send_message(
         f"Use this [authentication link]({full_link}) to authorize your characters.", ephemeral=True)
 

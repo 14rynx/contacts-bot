@@ -5,7 +5,6 @@ from preston import Preston
 from requests.exceptions import HTTPError
 
 from models import Character, ExternalContact
-from utils import with_refresh
 
 logger = logging.getLogger("discord.main.contacts")
 
@@ -69,7 +68,7 @@ def delete_character_contacts(preston: Preston, character_id: str, contacts_to_d
 def remove_contact(this_character: Character, preston: Preston):
     """Add all required contacts for a new linked character."""
     try:
-        this_char_authed_preston = with_refresh(preston, this_character.token)
+        this_char_authed_preston = preston.authenticate_from_token(this_character.token)
     except HTTPError as exp:
         if exp.response.status_code == 401:
             return
@@ -81,7 +80,7 @@ def remove_contact(this_character: Character, preston: Preston):
     # Delete this contact for other characters
     for character in Character.select().where(Character.character_id != this_character.character_id):
         try:
-            authed_preston = with_refresh(preston, character.token)
+            authed_preston = preston.authenticate_from_token(character.token)
         except HTTPError as exp:
             if exp.response.status_code == 401:
                 continue
@@ -107,7 +106,7 @@ def add_contact(this_character: Character, preston: Preston):
     character_ids = set()
     for character in Character.select().where(Character.character_id != this_character.character_id):
         try:
-            authed_preston = with_refresh(preston, character.token)
+            authed_preston = preston.authenticate_from_token(character.token)
         except HTTPError as exp:
             if exp.response.status_code == 401:
                 continue
@@ -118,7 +117,7 @@ def add_contact(this_character: Character, preston: Preston):
 
     # Add contacts to this character
     try:
-        this_char_authed_preston = with_refresh(preston, this_character.token)
+        this_char_authed_preston = preston.authenticate_from_token(this_character.token)
     except HTTPError as exp:
         if exp.response.status_code == 401:
             return
@@ -137,7 +136,7 @@ def add_external_contact(contact_id: str, preston: Preston):
     """Add external contact to all characters"""
     for character in Character.select():
         try:
-            authed_preston = with_refresh(preston, character.token)
+            authed_preston = preston.authenticate_from_token(character.token)
         except HTTPError as exp:
             if exp.response.status_code == 401:
                 continue
@@ -150,7 +149,7 @@ def remove_external_contact(contact_id: str, preston: Preston):
     """Add external contact to all characters"""
     for character in Character.select():
         try:
-            authed_preston = with_refresh(preston, character.token)
+            authed_preston = preston.authenticate_from_token(character.token)
         except HTTPError as exp:
             if exp.response.status_code == 401:
                 continue

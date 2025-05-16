@@ -45,8 +45,8 @@ async def callback_server(preston: Preston, add_contacts):
 
         # Get character data
         character_data = auth.whoami()
-        character_id = character_data["CharacterID"]
-        character_name = character_data["CharacterName"]
+        character_id = character_data["character_id"]
+        character_name = character_data["character_name"]
 
         # Create / Update user and store refresh_token
         user = User.get_or_none(user_id=challenge.user.user_id)
