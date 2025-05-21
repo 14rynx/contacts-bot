@@ -268,18 +268,15 @@ async def auth(interaction: Interaction):
 )
 @command_error_handler
 async def revoke(interaction: Interaction, character_name: str | None = None):
-    """Revokes ESI access for your characters.
-    :args: Character that you want to revoke access to.
-    If no arguments are provided, revokes all characters."""
+    await interaction.response.defer(ephemeral=True)
 
     user = User.get_or_none(User.user_id == str(interaction.user.id))
 
     if user is None:
-        await interaction.response.send_message(f"You did not have any authorized characters in the first place.")
+        await interaction.followup.defer(f"You did not have any authorized characters in the first place.")
         return
 
     if character_name is None:
-        await interaction.response.defer(ephemeral=True)
 
         user_characters = Character.select().where(Character.user == user)
         if user_characters:
@@ -295,16 +292,16 @@ async def revoke(interaction: Interaction, character_name: str | None = None):
         try:
             character_id = await lookup(base_preston, character_name, return_type="characters")
         except ValueError:
-            await interaction.response.send_message(f"Args `{character_name}` could not be parsed or looked up.")
+            await interaction.followup.send(f"Args `{character_name}` could not be parsed or looked up.")
             return
         character = user.characters.select().where(Character.character_id == character_id).first()
         if not character:
-            await interaction.response.send_message("You have no character with that name linked.")
+            await interaction.followup.send("You have no character with that name linked.")
             return
 
-        remove_contact(character)
+        remove_contact(character, base_preston)
         character.delete_instance()
-        await interaction.response.send_message(f"Successfully removed {character_name}.", ephemeral=True)
+        await interaction.followup.send(f"Successfully removed {character_name}.", ephemeral=True)
 
 
 @bot.tree.command(
@@ -321,14 +318,16 @@ async def add_external(
         entity_type: Literal["character", "corporation", "alliance"],
         entity_name: str
 ):
+    await interaction.response.defer(ephemeral=True)
+
     if not interaction.user.id == int(os.getenv("ADMIN")):
-        await interaction.response.send_message(f"You do not have rights to add external contacts.")
+        await interaction.followup.send(f"You do not have rights to add external contacts.")
         return
 
     try:
         contact_id = await lookup(base_preston, entity_name, return_type=entity_type + "s")
     except ValueError:
-        await interaction.response.send_message(f"Args `{entity_name}` could not be parsed or looked up.")
+        await interaction.followup.send(f"Args `{entity_name}` could not be parsed or looked up.")
         return
 
     contact, created = ExternalContact.get_or_create(
@@ -338,9 +337,9 @@ async def add_external(
     add_external_contact(contact_id, base_preston)
 
     if created:
-        await interaction.response.send_message(f"Successfully added {entity_name} as a contact.", ephemeral=True)
+        await interaction.followup.send(f"Successfully added {entity_name} as a contact.", ephemeral=True)
     else:
-        await interaction.response.send_message(f"Successfully re-added {entity_name} as a contact.", ephemeral=True)
+        await interaction.followup.send(f"Successfully re-added {entity_name} as a contact.", ephemeral=True)
 
 
 @bot.tree.command(
@@ -357,15 +356,16 @@ async def remove_external(
         entity_type: Literal["character", "corporation", "alliance"],
         entity_name: str
 ):
-    """"""
+    await interaction.response.defer(ephemeral=True)
+
     if not interaction.user.id == int(os.getenv("ADMIN")):
-        await interaction.response.send_message(f"You do not have rights to add external contacts.")
+        await interaction.followup.send(f"You do not have rights to add external contacts.")
         return
 
     try:
         contact_id = await lookup(base_preston, entity_name, return_type=entity_type + "s")
     except ValueError:
-        await interaction.response.send_message(f"Args `{entity_name}` could not be parsed or looked up.")
+        await interaction.followup.send(f"Args `{entity_name}` could not be parsed or looked up.")
         return
 
     contact = ExternalContact.get_or_none(
@@ -373,7 +373,7 @@ async def remove_external(
     )
 
     if contact is None:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"{entity_name} was not added and thus can not be removed.", ephemeral=True
         )
         return
@@ -381,7 +381,7 @@ async def remove_external(
     remove_external_contact(contact_id, base_preston)
 
     contact.delete_instance()
-    await interaction.response.send_message(f"Successfully removed {entity_name}.", ephemeral=True)
+    await interaction.followup.send(f"Successfully removed {entity_name}.", ephemeral=True)
 
 
 if __name__ == "__main__":
